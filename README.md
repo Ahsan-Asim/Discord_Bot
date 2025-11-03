@@ -1,0 +1,1 @@
+# Hellgate Discord AI Bot
