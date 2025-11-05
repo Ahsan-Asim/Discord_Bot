@@ -1,20 +1,33 @@
-require('dotenv').config();
-const { createClient } = require('@supabase/supabase-js');
+import 'dotenv/config';
+import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY
 );
 
-async function testConnection() {
-  const { data, error } = await supabase
-    .from('your_table_name')
-    .select('*')
-    .limit(1);
+async function testInsert() {
+  try {
+    const { data, error } = await supabase
+      .from('bot_messages') // table name
+      .insert([
+        {
+          channel: 'test-channel',
+          direction: 'inbound',
+          user_ref: 'test-user',
+          content: 'Hello from test script!',
+          metadata: {}, // empty JSON object
+        },
+      ]);
 
-  if (error) console.error('❌ Supabase error:', error);
-  else console.log('✅ Supabase data:', data);
+    if (error) {
+      console.error('❌ Supabase insert error:', error);
+    } else {
+      console.log('✅ Insert successful:', data);
+    }
+  } catch (err) {
+    console.error('❌ Unexpected error:', err);
+  }
 }
 
-testConnection();
-
+testInsert();
