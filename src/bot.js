@@ -14,10 +14,14 @@ import {
 import { createClient } from "@supabase/supabase-js";
 import { Events } from "discord.js";
 import { google } from "googleapis";
+import { getVoiceConnection } from "@discordjs/voice";
+
 
 
 
 dotenv.config();
+
+
 // Google Sheets auth
 const sheetsAuth = new google.auth.GoogleAuth({
   keyFile: "./service-account.json",
@@ -108,35 +112,71 @@ client.once("clientReady", () => {
   console.log(`Logged in as ${client.user.tag}`);
 });
 
-client.on("ready", async () => {
-  console.log(`Logged in as ${client.user.tag}`);
+// client.on("ready", async () => {
+//   console.log(`Logged in as ${client.user.tag}`);
   
 
-  const guild = client.guilds.cache.first();
-  if (!guild) return console.error("No guild found.");
+//   const guild = client.guilds.cache.first();
+//   if (!guild) return console.error("No guild found.");
 
 
-  const member = guild.members.cache.find((m) => m.user.username === "ahsan094758");
-  if (!member) return console.error("User not found in guild.");
+//   // Replace with your channel ID or pick the first voice channel
+// const voiceChannel = guild.channels.cache.get(process.env.VOICE_CHANNEL_ID);
+// if (!voiceChannel || voiceChannel.type !== 2) return console.error("Voice channel not found.");
 
-  if (member.voice?.channel) {
-    const connection = joinVoiceChannel({
-      channelId: member.voice.channel.id,
-      guildId: guild.id,
-      adapterCreator: guild.voiceAdapterCreator,
-      selfDeaf: false,
-    });
+// // Join voice channel
+// const connection = joinVoiceChannel({
+//   channelId: voiceChannel.id,
+//   guildId: guild.id,
+//   adapterCreator: guild.voiceAdapterCreator,
+//   selfDeaf: false,
+// });
 
-    connection.on("error", (err) => console.error("Voice connection error:", err.message));
-    connection.on(VoiceConnectionStatus.Disconnected, () => console.log("Disconnected from VC."));
-    connection.on(VoiceConnectionStatus.Destroyed, () => console.log("Voice connection destroyed."));
+// connection.on("error", (err) => console.error("Voice connection error:", err.message));
+// connection.on(VoiceConnectionStatus.Disconnected, () => console.log("Disconnected from VC."));
+// connection.on(VoiceConnectionStatus.Destroyed, () => console.log("Voice connection destroyed."));
 
-    console.log("Joined voice channel successfully!");
-    attachVoiceListener(connection, member.id, member);
-  } else {
-    console.log("User is not in a voice channel.");
+// console.log("Joined voice channel successfully!");
+
+// });
+client.on("ready", async () => {
+  console.log(`Logged in as ${client.user.tag}`);
+
+  const guild = await client.guilds.fetch(process.env.GUILD_ID).catch(() => null);
+  if (!guild) return console.error("Guild not found.");
+
+  const voiceChannel = await guild.channels.fetch(process.env.VOICE_CHANNEL_ID).catch(() => null);
+  if (!voiceChannel || voiceChannel.type !== 2) return console.error("Voice channel not found.");
+
+  // Join voice channel
+  const connection = joinVoiceChannel({
+    channelId: voiceChannel.id,
+    guildId: guild.id,
+    adapterCreator: guild.voiceAdapterCreator,
+    selfDeaf: false,
+  });
+
+  connection.on("error", (err) => console.error("Voice connection error:", err.message));
+  connection.on(VoiceConnectionStatus.Disconnected, () => console.log("Disconnected from VC."));
+  connection.on(VoiceConnectionStatus.Destroyed, () => console.log("Voice connection destroyed."));
+
+  console.log("Joined voice channel successfully!");
+});
+
+client.on("voiceStateUpdate", (oldState, newState) => {
+  // Ignore bot
+  if (newState.member.user.bot) return;
+
+  // Check if user joined the same VC as bot
+const connection = getVoiceConnection(newState.guild.id);
+  if (!connection) return;
+
+  if (newState.channelId === connection.joinConfig.channelId) {
+    console.log(`User joined VC: ${newState.member.user.username} (${newState.id})`);
+    attachVoiceListener(connection, newState.member.id, newState.member);
   }
 });
+
 
 // ------------------- TEXT CHAT LISTENER -------------------
 client.on(Events.MessageCreate, async (message) => {
@@ -265,97 +305,19 @@ async function playAudioInVC(connection, filePath) {
   }
 }
 
-// ------------------- VOICE LISTENER -------------------
-// function attachVoiceListener(connection, userId, member) {
-//   const receiver = connection.receiver;
 
-//   console.log(`🎧 Listening to ${member.user.username}...`);
+// Global flag object to track recording per user
+const isRecording = {};
 
-//   // Helper to handle one speaking session
-//   const handleSpeaking = async (id) => {
-//     if (id !== userId) return;
-
-//     console.log(`🎙️ ${member.user.username} started speaking...`);
-
-//     const opusStream = receiver.subscribe(id, {
-//       end: { behavior: EndBehaviorType.Manual },
-//       mode: "opus",
-//     });
-
-//     const wavPath = `./temp_${userId}_${Date.now()}.wav`;
-
-//     const decoder = new prism.opus.Decoder({ frameSize: 960, channels: 1, rate: 48000 });
-//     const wavWriter = new wav.FileWriter(wavPath, { sampleRate: 48000, channels: 1 });
-
-//     decoder.on("error", (err) => console.error("❌ Decoder error (ignored):", err.message));
-
-//     opusStream.pipe(decoder).pipe(wavWriter);
-
-//     // Stop recording after 2s of silence
-//     let silenceTimer;
-//     opusStream.on("data", () => {
-//       clearTimeout(silenceTimer);
-//       silenceTimer = setTimeout(() => {
-//         opusStream.emit("end");
-//       }, 2000);
-//     });
-
-//     // Wait for WAV file to finish writing before proceeding
-//     const finishWriting = new Promise((resolve, reject) => {
-//       wavWriter.on("finish", resolve);
-//       wavWriter.on("error", reject);
-//     });
-
-//     opusStream.on("end", () => {
-//       console.log("⏹️ Silence detected — finalizing recording...");
-//       opusStream.unpipe();
-//       decoder.end();
-//       wavWriter.end();
-//     });
-
-//     try {
-//       await finishWriting; // ✅ Wait for complete file
-//       console.log(`💾 WAV saved: ${wavPath}`);
-
-//       const transcription = await transcribeAudio(wavPath);
-//       console.log(`📝 ${member.user.username} says: "${transcription}"`);
-
-//       if (!transcription || transcription.length < 1) {
-//         console.log("⚠️ No transcription, ignoring this input.");
-//         if (fs.existsSync(wavPath)) fs.unlinkSync(wavPath);
-//         attachListener(); // Ready for next speech
-//         return;
-//       }
-
-//       const reply = await getGPTReply(transcription, member.voice.channel.id);
-//       console.log(`💬 GPT reply: "${reply}"`);
-
-//       await textToSpeech(reply);
-//       await playAudioInVC(connection, "response.mp3");
-//       await logMessageToSupabase(member.voice.channel.id, "outbound", "Hellgate", reply);
-
-//     } catch (err) {
-//       console.error("❌ Error processing voice:", err);
-//       await logErrorToSupabase("voice processing", err.message, { userId: member.id });
-//     } finally {
-//       if (fs.existsSync(wavPath)) {
-//         fs.unlinkSync(wavPath);
-//         console.log("🧹 Deleted temp WAV file.");
-//       }
-//       attachListener(); // Ready for next speech
-//     }
-//   };
-
-//   const attachListener = () => receiver.speaking.once("start", handleSpeaking);
-
-//   attachListener();
-// }
 function attachVoiceListener(connection, userId, member) {
   const receiver = connection.receiver;
   console.log(`🎧 Listening to ${member.user.username}...`);
 
   const handleSpeaking = async (id) => {
     if (id !== userId) return;
+    if (isRecording[userId]) return; // Prevent overlapping streams
+    isRecording[userId] = true;
+
     console.log(`🎙️ ${member.user.username} started speaking...`);
 
     const opusStream = receiver.subscribe(id, {
@@ -399,12 +361,13 @@ function attachVoiceListener(connection, userId, member) {
       if (!transcription || transcription.length < 1) {
         console.log("No transcription, ignoring this input.");
         if (fs.existsSync(wavPath)) fs.unlinkSync(wavPath);
+        isRecording[userId] = false;
         attachListener();
         return;
       }
 
-      //NEW: Handle Schedule Registration via Voice
-      if (transcription.toLowerCase().includes("register") && transcription.toLowerCase().includes("schedule")) {
+      // Handle Schedule Registration via Voice
+      if (transcription.toLowerCase().includes("register") || transcription.toLowerCase().includes("schedule")) {
         await textToSpeech("You want to register a schedule. Do you want to continue? Please say YES to confirm.");
         await playAudioInVC(connection, "response.mp3");
 
@@ -418,7 +381,6 @@ function attachVoiceListener(connection, userId, member) {
           await playAudioInVC(connection, "response.mp3");
           const dateTime = await captureNextVoiceResponse(connection, userId);
 
-          //Append to Google Sheet
           const rowData = [name, dateTime, "Schedule registered via voice"];
           await appendToSheet(rowData);
 
@@ -430,11 +392,12 @@ function attachVoiceListener(connection, userId, member) {
         }
 
         if (fs.existsSync(wavPath)) fs.unlinkSync(wavPath);
+        isRecording[userId] = false;
         attachListener();
         return;
       }
 
-      //Normal GPT response (default flow)
+      // Normal GPT response
       const reply = await getGPTReply(transcription, member.voice.channel.id);
       console.log(`GPT reply: "${reply}"`);
 
@@ -450,6 +413,7 @@ function attachVoiceListener(connection, userId, member) {
         fs.unlinkSync(wavPath);
         console.log("🧹 Deleted temp WAV file.");
       }
+      isRecording[userId] = false;
       attachListener(); // Ready for next speech
     }
   };
@@ -457,6 +421,7 @@ function attachVoiceListener(connection, userId, member) {
   const attachListener = () => receiver.speaking.once("start", handleSpeaking);
   attachListener();
 }
+
 function captureNextVoiceResponse(connection, userId) {
   return new Promise((resolve) => {
     const receiver = connection.receiver;
