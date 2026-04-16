@@ -14,34 +14,133 @@ import prism from "prism-media";
 import wav from "wav";
 import OpenAI from "openai";
 import { db } from "./firebase.js";
-import { ref, push, set, update } from "firebase/database";
+import { ref, push, set, get,update } from "firebase/database";
+import * as chrono from "chrono-node";
 
 dotenv.config();
+
+function parseScheduleToDate(text) {
+  return chrono.parseDate(text, new Date(), { forwardDate: true });
+}
+const REMINDER_CHANNEL_ID = process.env.REMINDER_CHANNEL_ID;
+
+async function checkReminders() {
+  try {
+    const usersRef = ref(db, "users");
+    const snapshot = await get(usersRef);
+
+    console.log("CHECK RUNNING:", new Date().toISOString());
+
+    if (!snapshot.exists()) return;
+
+    const users = snapshot.val();
+    const now = Date.now();
+
+    for (const username in users) {
+  const user = users[username];
+
+  if (user.settings && user.settings.notificationsEnabled === false) {
+    continue;
+  }
+
+  const schedules = user.schedules;
+  if (!schedules) continue;
+
+  for (const id in schedules) {
+        const sched = schedules[id];
+
+        if (sched.reminded) continue;
+
+        if (sched.reminderAt && sched.reminderAt <= now) {
+  console.log(`⏰ Sending channel reminder`);
+
+  try {
+    const channel = await client.channels.fetch(REMINDER_CHANNEL_ID);
+
+    if (!channel) {
+      console.log("Reminder channel not found");
+      continue;
+    }
+
+    await channel.send(
+      `⏰ **Reminder Alert**\n\n` +
+      `👤 User: ${username}\n` +
+      `📅 Event: ${sched.scheduleText}\n\n` +
+      `⏳ Starts in 1 hour!`
+    );
+
+    await update(ref(db, `users/${username}/schedules/${id}`), {
+      reminded: true,
+    });
+
+  } catch (err) {
+    console.error("Channel reminder failed:", err.message);
+  }
+}
+      }
+    }
+  } catch (err) {
+    console.error("Reminder system error:", err);
+  }
+}
+
+// run every minute
+setInterval(checkReminders, 60 * 1000);
 
 // ------------------- Firebase Save -------------------
 async function saveScheduleToFirebase(username, userMessages, botResponses, scheduleText) {
   try {
     const userRef = ref(db, `users/${username}`);
+   
 
-    // Update main profile fields
-    await update(userRef, {
-      username,
-      schedulesMessage: scheduleText,
-      responding: botResponses[botResponses.length - 1],
-      memory: "Learning Firebase",
-    });
+    const scheduledAt = parseScheduleToDate(scheduleText);
 
-    // Save history under schedules
+    if (!scheduledAt) {
+      console.log("❌ Could not parse schedule time");
+      return;
+    }
+
+    const reminderAt = new Date(scheduledAt.getTime() - 60 * 60 * 1000);
+
+     console.log("SCHEDULE TEXT:", scheduleText);
+console.log("SCHEDULED AT:", scheduledAt);
+console.log("REMINDER AT:", reminderAt);
+
+    const snapshot = await get(userRef);
+
+let existingSettings = {};
+if (snapshot.exists() && snapshot.val().settings) {
+  existingSettings = snapshot.val().settings;
+}
+
+await update(userRef, {
+  username,
+  schedulesMessage: scheduleText,
+  responding: botResponses[botResponses.length - 1],
+  memory: "Learning Firebase",
+
+  settings: {
+    notificationsEnabled: existingSettings.notificationsEnabled ?? true
+  }
+});
+
+    // create schedule entry
     const scheduleRef = ref(db, `users/${username}/schedules`);
     const newSchedule = push(scheduleRef);
 
     await set(newSchedule, {
       messages: userMessages.join(" | "),
       responses: botResponses.join(" | "),
+
+      scheduleText,
+      scheduledAt: scheduledAt.getTime(),
+      reminderAt: reminderAt.getTime(),
+      reminded: false,
+
       createdAt: Date.now(),
     });
 
-    console.log("✅ Saved to Firebase");
+    console.log("✅ Saved schedule with reminder");
   } catch (err) {
     console.error("Firebase error:", err);
   }
